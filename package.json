@@ -1,0 +1,27 @@
+{
+  "name": "plandosee",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": ["apps/*", "packages/*"],
+  "scripts": {
+    "dev:web": "npm run dev --workspace @plandosee/web",
+    "dev:api": "npm run dev --workspace @plandosee/api",
+    "build": "npm run build:web && npm run build:api",
+    "build:web": "npm run build --workspace @plandosee/web",
+    "build:api": "npm run build --workspace @plandosee/api",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "db:generate": "npm run db:generate --workspace @plandosee/api",
+    "db:migrate:deploy": "npm run db:migrate:deploy --workspace @plandosee/api",
+    "db:test-reset": "npm run db:test-reset --workspace @plandosee/api",
+    "db:verify": "npm run db:verify --workspace @plandosee/api",
+    "verify:web-secrets": "node scripts/check-web-bundle.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "prisma": "6.19.3",
+    "tsx": "4.23.15",
+    "typescript": "5.9.3",
+    "vitest": "3.2.7"
+  }
+}

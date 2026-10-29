@@ -1,0 +1,16 @@
+{
+  "name": "@plandosee/shared",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./date-seoul": "./src/date-seoul.ts",
+    "./domain-logic": "./src/domain-logic.ts",
+    "./records": "./src/records.ts",
+    "./validation": "./src/validation.ts"
+  },
+  "dependencies": {
+    "zod": "3.25.76"
+  }
+}

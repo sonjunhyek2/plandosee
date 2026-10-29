@@ -1,0 +1,249 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "schemaVersion": "2.0.0",
+  "contractId": "pds-schema-v2",
+  "title": "Plan-Do-See Diary v1 Database & Export Contract",
+  "description": "실제 PostgreSQL 데이터베이스(Prisma 스키마)와 1:1로 일치하는 데이터 구조, 제약 조건, 단위, 시간대 및 돌아보기 집계 규칙 정의서",
+  "databaseProvider": "postgresql",
+  "orm": "prisma@6.19.3",
+  "conventions": {
+    "timeUnit": {
+      "unit": "minutes",
+      "type": "integer",
+      "displayFormat": "분 (예: 90분 / 1시간 30분)",
+      "durationCalculationRule": "시작 시각(startedAt)과 종료 시각(endedAt) 차이(밀리초)를 60,000으로 나눈 뒤 Math.round()로 반올림한 0 이상의 정수 분(minute)을 기본값으로 계산하며, 사용자가 정수 분 단위로 직접 입력·보정할 수 있음. 음수 값은 서버 및 DB CHECK 제약으로 거부함."
+    },
+    "dateAndTimezone": {
+      "displayTimezone": "Asia/Seoul",
+      "dateOnlyFields": [
+        "Plan.startDate",
+        "Plan.endDate",
+        "PlanSnapshot.startDate",
+        "PlanSnapshot.endDate",
+        "Task.dueDate",
+        "Review.periodStartDate",
+        "Review.periodEndDate"
+      ],
+      "dateOnlyStorageType": "DATE (YYYY-MM-DD)",
+      "timestampFields": [
+        "Plan.createdAt",
+        "Plan.updatedAt",
+        "PlanSnapshot.changedAt",
+        "Task.completedAt",
+        "Task.deletedAt",
+        "Task.createdAt",
+        "Task.updatedAt",
+        "TaskCompletionEvent.occurredAt",
+        "ExecutionLog.startedAt",
+        "ExecutionLog.endedAt",
+        "ExecutionLog.createdAt",
+        "Review.createdAt",
+        "Review.updatedAt"
+      ],
+      "timestampStorageType": "TIMESTAMPTZ(3) (ISO-8601 UTC 저장 및 Asia/Seoul 변환 표시)",
+      "rangeQueryRule": "시각 범위 조회 시 종료일 23:59:59 대신 [시작일 00:00:00+09:00 이상, 다음 날 00:00:00+09:00 미만)의 반열린 구간(half-open interval)을 사용하며, 날짜 전용(DATE) 컬럼은 YYYY-MM-DD 기준으로 [startDate, endDate] 경계를 포함하여 비교함."
+    },
+    "deletionPolicy": {
+      "Plan": "CASCADE (하위 스냅샷, 할 일, 회고 연쇄 삭제 가능하나 일반 UI에서는 계획 삭제를 제공하지 않고 보존함)",
+      "PlanSnapshot": "IMMUTABLE (생성 후 수정 및 삭제 절대 불가)",
+      "Task": "SOFT_DELETE (isDeleted = true 및 deletedAt 기록, 일반 목록과 돌아보기 집계에서 제외하되 기존 ExecutionLog 및 TaskCompletionEvent 연결 보존. 삭제된 할 일에는 완료/취소/실행기록 추가 차단)",
+      "ExecutionLog": "PRESERVE (할 일 완료 취소나 할 일 논리 삭제 시에도 과거 실행 기록은 삭제하지 않고 보존)",
+      "TaskCompletionEvent": "APPEND_AND_STATE_TRACK (완료/완료 취소 전이 이력 보존 및 현재 활성 완료 상태 isActiveCompletion 단일성 보장)"
+    },
+    "aggregationRules": {
+      "ruleCode": "TASK_DUE_DATE_IN_PERIOD_WITH_ALL_TASK_EXECUTION_LOGS_ASIA_SEOUL",
+      "targetTasksSelection": {
+        "baseCondition": "Task.planId == selectedPlanId AND Task.isDeleted == false",
+        "allPeriodMode": "선택한 계획에 속한 삭제되지 않은 모든 할 일",
+        "customPeriodMode": "선택한 계획에 속한 삭제되지 않은 할 일 중 Task.dueDate가 [periodStartDate, periodEndDate] 구간(양 끝 날짜 포함)에 속하는 할 일"
+      },
+      "outOfPeriodExecutionLogsPolicy": "집계 대상 할 일(targetTasks)에 연결된 모든 ExecutionLog의 actualMinutes를 합산함. 실행 시각(startedAt/endedAt)이 회고 선택 기간 밖이더라도 해당 대상 할 일을 수행하기 위해 투입된 실제 시간으로 포함하며, 화면에 이 기준과 기간 밖 실행 기록 건수를 명시함.",
+      "metrics": {
+        "plannedCount": "대상 할 일(targetTasks)의 총 개수 (JOIN으로 인한 중복 합산 방지를 위해 Task 엔티티 기준으로 독립 집계)",
+        "completedCount": "대상 할 일 중 현재 Task.status == 'DONE'인 할 일의 개수 (완료 이벤트 누적 횟수가 아닌 현재 상태 기준)",
+        "delayedCount": "대상 할 일 중 현재 Task.status != 'DONE' 이면서 Task.dueDate < today(Asia/Seoul 기준 YYYY-MM-DD)인 할 일의 개수 (완료된 할 일은 마감일이 지났어도 지연에서 제외)",
+        "blockedCount": "대상 할 일 중 공백을 제거한 ExecutionLog.blockReason의 길이가 1 이상인 실행 기록이 하나라도 존재하는 할 일의 개수 (한 할 일에 막힘 기록이 여러 개여도 1건으로 계산)",
+        "estimatedMinutes": "대상 할 일의 Task.estimatedMinutes 단순 합계 (실행 기록 수와 무관하게 1회씩만 합산)",
+        "actualMinutes": "대상 할 일에 속한 ExecutionLog.actualMinutes의 총합",
+        "diffMinutes": "actualMinutes - estimatedMinutes (음수면 예상보다 단축, 양수면 예상보다 초과)",
+        "emptyDataRule": "대상 할 일이 0건이면 plannedCount, completedCount, delayedCount, blockedCount, estimatedMinutes, actualMinutes, diffMinutes 모두 정확히 0을 반환함"
+      }
+    }
+  },
+  "enums": {
+    "Priority": ["HIGH", "MEDIUM", "LOW"],
+    "TaskStatus": ["TODO", "DONE"],
+    "CompletionAction": ["COMPLETE", "UNCOMPLETE"]
+  },
+  "tables": {
+    "Plan": {
+      "description": "사용자가 수립한 계획 엔티티. 수정 시에도 ID가 유지되며 최초 및 변경 상태는 PlanSnapshot에 누적 보존됨.",
+      "primaryKey": ["id"],
+      "uniqueConstraints": [
+        ["sourceReviewId"]
+      ],
+      "checkConstraints": [
+        "estimatedMinutes >= 0",
+        "endDate >= startDate",
+        "version >= 1"
+      ],
+      "fields": {
+        "id": { "type": "string", "dbType": "TEXT", "required": true, "description": "계획 고유 식별자 (CUID)" },
+        "title": { "type": "string", "dbType": "TEXT", "required": true, "minLength": 1, "description": "계획 제목" },
+        "startDate": { "type": "string", "format": "date", "dbType": "DATE", "required": true, "description": "계획 시작일 (YYYY-MM-DD)" },
+        "endDate": { "type": "string", "format": "date", "dbType": "DATE", "required": true, "description": "계획 종료일 (YYYY-MM-DD)" },
+        "priority": { "type": "string", "enum": ["HIGH", "MEDIUM", "LOW"], "dbType": "Priority", "required": true, "default": "MEDIUM" },
+        "successCriteria": { "type": "string", "dbType": "TEXT", "required": true, "minLength": 1, "description": "성공 기준" },
+        "estimatedMinutes": { "type": "integer", "dbType": "INTEGER", "required": true, "minimum": 0, "unit": "minutes", "description": "계획 예상 총 소요 시간(분)" },
+        "appliedImprovementNote": { "type": ["string", "null"], "dbType": "TEXT", "required": false, "description": "이전 돌아보기(Review)에서 인계받아 별도 보존된 개선점 한 줄 (성공 기준을 덮어쓰지 않음)" },
+        "version": { "type": "integer", "dbType": "INTEGER", "required": true, "minimum": 1, "default": 1, "description": "현재 계획 버전 번호 (생성 시 1, 수정마다 +1)" },
+        "parentPlanId": { "type": ["string", "null"], "dbType": "TEXT", "required": false, "foreignKey": "Plan.id", "onDelete": "SET NULL" },
+        "sourceReviewId": { "type": ["string", "null"], "dbType": "TEXT", "required": false, "foreignKey": "Review.id", "onDelete": "SET NULL", "unique": true },
+        "createdAt": { "type": "string", "format": "date-time", "dbType": "TIMESTAMPTZ(3)", "required": true },
+        "updatedAt": { "type": "string", "format": "date-time", "dbType": "TIMESTAMPTZ(3)", "required": true }
+      }
+    },
+    "PlanSnapshot": {
+      "description": "계획 생성 시(version 1) 및 매 수정 시(version 2, 3...) 전체 상태를 불변 스냅샷으로 보존하는 이력 테이블.",
+      "primaryKey": ["id"],
+      "uniqueConstraints": [
+        ["planId", "version"]
+      ],
+      "checkConstraints": [
+        "estimatedMinutes >= 0",
+        "endDate >= startDate",
+        "version >= 1"
+      ],
+      "fields": {
+        "id": { "type": "string", "dbType": "TEXT", "required": true },
+        "planId": { "type": "string", "dbType": "TEXT", "required": true, "foreignKey": "Plan.id", "onDelete": "CASCADE" },
+        "version": { "type": "integer", "dbType": "INTEGER", "required": true, "minimum": 1 },
+        "title": { "type": "string", "dbType": "TEXT", "required": true },
+        "startDate": { "type": "string", "format": "date", "dbType": "DATE", "required": true },
+        "endDate": { "type": "string", "format": "date", "dbType": "DATE", "required": true },
+        "priority": { "type": "string", "enum": ["HIGH", "MEDIUM", "LOW"], "dbType": "Priority", "required": true },
+        "successCriteria": { "type": "string", "dbType": "TEXT", "required": true },
+        "estimatedMinutes": { "type": "integer", "dbType": "INTEGER", "required": true, "minimum": 0, "unit": "minutes" },
+        "appliedImprovementNote": { "type": ["string", "null"], "dbType": "TEXT", "required": false },
+        "changedAt": { "type": "string", "format": "date-time", "dbType": "TIMESTAMPTZ(3)", "required": true }
+      }
+    },
+    "Task": {
+      "description": "계획에 속한 할 일 엔티티. 논리 삭제(isDeleted)를 사용하며 version과 completedRequestId로 동시 완료 충돌 및 멱등성을 제어함.",
+      "primaryKey": ["id"],
+      "uniqueConstraints": [],
+      "checkConstraints": [
+        "estimatedMinutes >= 0",
+        "version >= 1"
+      ],
+      "fields": {
+        "id": { "type": "string", "dbType": "TEXT", "required": true },
+        "planId": { "type": "string", "dbType": "TEXT", "required": true, "foreignKey": "Plan.id", "onDelete": "CASCADE" },
+        "title": { "type": "string", "dbType": "TEXT", "required": true, "minLength": 1 },
+        "dueDate": { "type": "string", "format": "date", "dbType": "DATE", "required": true, "description": "마감일 (YYYY-MM-DD)" },
+        "priority": { "type": "string", "enum": ["HIGH", "MEDIUM", "LOW"], "dbType": "Priority", "required": true, "default": "MEDIUM" },
+        "tags": { "type": "array", "items": { "type": "string" }, "dbType": "TEXT[]", "required": true },
+        "estimatedMinutes": { "type": "integer", "dbType": "INTEGER", "required": true, "minimum": 0, "unit": "minutes" },
+        "status": { "type": "string", "enum": ["TODO", "DONE"], "dbType": "TaskStatus", "required": true, "default": "TODO" },
+        "version": { "type": "integer", "dbType": "INTEGER", "required": true, "minimum": 1, "default": 1, "description": "상태 변경마다 1씩 증가하는 낙관적 락 버전" },
+        "completedAt": { "type": ["string", "null"], "format": "date-time", "dbType": "TIMESTAMPTZ(3)", "required": false },
+        "completedRequestId": { "type": ["string", "null"], "dbType": "TEXT", "required": false, "description": "현재 완료 상태를 만든 요청의 멱등 식별자" },
+        "isDeleted": { "type": "boolean", "dbType": "BOOLEAN", "required": true, "default": false },
+        "deletedAt": { "type": ["string", "null"], "format": "date-time", "dbType": "TIMESTAMPTZ(3)", "required": false },
+        "createdAt": { "type": "string", "format": "date-time", "dbType": "TIMESTAMPTZ(3)", "required": true },
+        "updatedAt": { "type": "string", "format": "date-time", "dbType": "TIMESTAMPTZ(3)", "required": true }
+      }
+    },
+    "TaskCompletionEvent": {
+      "description": "할 일 완료 및 완료 취소 상태 전이 이벤트 기록. 일반 실행 기록(ExecutionLog)과 분리되어 완료 기록의 단일성과 멱등성·동시성을 검증함.",
+      "primaryKey": ["id"],
+      "uniqueConstraints": [
+        ["requestId"],
+        ["taskId", "toVersion"],
+        ["taskId WHERE isActiveCompletion = true (Partial Unique Index)"]
+      ],
+      "checkConstraints": [
+        "toVersion = fromVersion + 1"
+      ],
+      "fields": {
+        "id": { "type": "string", "dbType": "TEXT", "required": true },
+        "taskId": { "type": "string", "dbType": "TEXT", "required": true, "foreignKey": "Task.id", "onDelete": "CASCADE" },
+        "requestId": { "type": "string", "dbType": "TEXT", "required": true, "unique": true },
+        "action": { "type": "string", "enum": ["COMPLETE", "UNCOMPLETE"], "dbType": "CompletionAction", "required": true },
+        "fromVersion": { "type": "integer", "dbType": "INTEGER", "required": true },
+        "toVersion": { "type": "integer", "dbType": "INTEGER", "required": true },
+        "isActiveCompletion": { "type": "boolean", "dbType": "BOOLEAN", "required": true, "default": false },
+        "occurredAt": { "type": "string", "format": "date-time", "dbType": "TIMESTAMPTZ(3)", "required": true }
+      }
+    },
+    "ExecutionLog": {
+      "description": "할 일에 대한 실제 실행 기록. 한 할 일에 여러 건 기록할 수 있으며, 원래 계획 및 할 일의 예상 시간을 덮어쓰지 않음.",
+      "primaryKey": ["id"],
+      "uniqueConstraints": [],
+      "checkConstraints": [
+        "actualMinutes >= 0",
+        "endedAt >= startedAt"
+      ],
+      "fields": {
+        "id": { "type": "string", "dbType": "TEXT", "required": true },
+        "taskId": { "type": "string", "dbType": "TEXT", "required": true, "foreignKey": "Task.id", "onDelete": "CASCADE" },
+        "startedAt": { "type": "string", "format": "date-time", "dbType": "TIMESTAMPTZ(3)", "required": true },
+        "endedAt": { "type": "string", "format": "date-time", "dbType": "TIMESTAMPTZ(3)", "required": true },
+        "actualMinutes": { "type": "integer", "dbType": "INTEGER", "required": true, "minimum": 0, "unit": "minutes" },
+        "blockReason": { "type": ["string", "null"], "dbType": "TEXT", "required": false, "description": "막혔던 이유 (없으면 null 또는 빈 문자열)" },
+        "createdAt": { "type": "string", "format": "date-time", "dbType": "TIMESTAMPTZ(3)", "required": true }
+      }
+    },
+    "Review": {
+      "description": "특정 계획과 기간에 대한 돌아보기(See) 및 개선점 기록. 다음 계획 생성 시 Plan.sourceReviewId로 연결됨.",
+      "primaryKey": ["id"],
+      "uniqueConstraints": [],
+      "checkConstraints": [
+        "periodStartDate IS NULL OR periodEndDate IS NULL OR periodEndDate >= periodStartDate"
+      ],
+      "fields": {
+        "id": { "type": "string", "dbType": "TEXT", "required": true },
+        "planId": { "type": "string", "dbType": "TEXT", "required": true, "foreignKey": "Plan.id", "onDelete": "CASCADE" },
+        "filterType": { "type": "string", "enum": ["ALL", "PERIOD"], "dbType": "TEXT", "required": true, "default": "ALL" },
+        "periodStartDate": { "type": ["string", "null"], "format": "date", "dbType": "DATE", "required": false },
+        "periodEndDate": { "type": ["string", "null"], "format": "date", "dbType": "DATE", "required": false },
+        "aggregationRule": { "type": "string", "dbType": "TEXT", "required": true },
+        "reflectionNote": { "type": "string", "dbType": "TEXT", "required": true },
+        "improvementNote": { "type": "string", "dbType": "TEXT", "required": true, "minLength": 1 },
+        "snapshotPlannedCount": { "type": "integer", "dbType": "INTEGER", "required": true },
+        "snapshotCompletedCount": { "type": "integer", "dbType": "INTEGER", "required": true },
+        "snapshotDelayedCount": { "type": "integer", "dbType": "INTEGER", "required": true },
+        "snapshotBlockedCount": { "type": "integer", "dbType": "INTEGER", "required": true },
+        "snapshotEstimatedMinutes": { "type": "integer", "dbType": "INTEGER", "required": true, "unit": "minutes" },
+        "snapshotActualMinutes": { "type": "integer", "dbType": "INTEGER", "required": true, "unit": "minutes" },
+        "snapshotDiffMinutes": { "type": "integer", "dbType": "INTEGER", "required": true, "unit": "minutes" },
+        "createdAt": { "type": "string", "format": "date-time", "dbType": "TIMESTAMPTZ(3)", "required": true },
+        "updatedAt": { "type": "string", "format": "date-time", "dbType": "TIMESTAMPTZ(3)", "required": true }
+      }
+    }
+  },
+  "exportFormat": {
+    "requiredTopLevelFields": [
+      "schemaVersion",
+      "contractId",
+      "exportedAt",
+      "timezone",
+      "unitRules",
+      "dateRules",
+      "aggregationRules",
+      "data"
+    ],
+    "dataCollections": [
+      "plans",
+      "planSnapshots",
+      "tasks",
+      "taskCompletionEvents",
+      "executionLogs",
+      "reviews",
+      "improvementLinks"
+    ],
+    "includesSoftDeletedRecords": true,
+    "excludesSecrets": true
+  }
+}
+

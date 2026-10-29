@@ -1,0 +1,150 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum Priority {
+  HIGH
+  MEDIUM
+  LOW
+}
+
+enum TaskStatus {
+  TODO
+  DONE
+}
+
+enum CompletionAction {
+  COMPLETE
+  UNCOMPLETE
+}
+
+model Plan {
+  id                     String         @id @default(cuid())
+  title                  String
+  startDate              DateTime       @db.Date
+  endDate                DateTime       @db.Date
+  priority               Priority       @default(MEDIUM)
+  successCriteria        String
+  estimatedMinutes       Int
+  appliedImprovementNote String?
+  version                Int            @default(1)
+
+  parentPlanId           String?
+  parentPlan             Plan?          @relation("PlanLineage", fields: [parentPlanId], references: [id], onDelete: SetNull)
+  childPlans             Plan[]         @relation("PlanLineage")
+
+  sourceReviewId         String?        @unique
+  sourceReview           Review?        @relation("ReviewNextPlan", fields: [sourceReviewId], references: [id], onDelete: SetNull)
+
+  createdAt              DateTime       @default(now()) @db.Timestamptz(3)
+  updatedAt              DateTime       @updatedAt @db.Timestamptz(3)
+
+  snapshots              PlanSnapshot[]
+  tasks                  Task[]
+  reviews                Review[]       @relation("PlanReviews")
+
+  @@index([createdAt])
+}
+
+model PlanSnapshot {
+  id                     String   @id @default(cuid())
+  planId                 String
+  plan                   Plan     @relation(fields: [planId], references: [id], onDelete: Cascade)
+  version                Int
+  title                  String
+  startDate              DateTime @db.Date
+  endDate                DateTime @db.Date
+  priority               Priority
+  successCriteria        String
+  estimatedMinutes       Int
+  appliedImprovementNote String?
+  changedAt              DateTime @default(now()) @db.Timestamptz(3)
+
+  @@unique([planId, version])
+  @@index([planId, version])
+}
+
+model Task {
+  id                 String                @id @default(cuid())
+  planId             String
+  plan               Plan                  @relation(fields: [planId], references: [id], onDelete: Cascade)
+  title              String
+  dueDate            DateTime              @db.Date
+  priority           Priority              @default(MEDIUM)
+  tags               String[]
+  estimatedMinutes   Int
+  status             TaskStatus            @default(TODO)
+  version            Int                   @default(1)
+  completedAt        DateTime?             @db.Timestamptz(3)
+  completedRequestId String?
+  isDeleted          Boolean               @default(false)
+  deletedAt          DateTime?             @db.Timestamptz(3)
+  createdAt          DateTime              @default(now()) @db.Timestamptz(3)
+  updatedAt          DateTime              @updatedAt @db.Timestamptz(3)
+
+  executionLogs      ExecutionLog[]
+  completionEvents   TaskCompletionEvent[]
+
+  @@index([planId, isDeleted, dueDate])
+  @@index([planId, isDeleted, status])
+}
+
+model TaskCompletionEvent {
+  id                 String           @id @default(cuid())
+  taskId             String
+  task               Task             @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  requestId          String           @unique
+  action             CompletionAction
+  fromVersion        Int
+  toVersion          Int
+  isActiveCompletion Boolean          @default(false)
+  occurredAt         DateTime         @default(now()) @db.Timestamptz(3)
+
+  @@unique([taskId, toVersion])
+  @@index([taskId, isActiveCompletion])
+}
+
+model ExecutionLog {
+  id            String   @id @default(cuid())
+  taskId        String
+  task          Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  startedAt     DateTime @db.Timestamptz(3)
+  endedAt       DateTime @db.Timestamptz(3)
+  actualMinutes Int
+  blockReason   String?
+  createdAt     DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([taskId, startedAt])
+}
+
+model Review {
+  id                       String    @id @default(cuid())
+  planId                   String
+  plan                     Plan      @relation("PlanReviews", fields: [planId], references: [id], onDelete: Cascade)
+  filterType               String    @default("ALL")
+  periodStartDate          DateTime? @db.Date
+  periodEndDate            DateTime? @db.Date
+  aggregationRule          String    @default("TASK_DUE_DATE_IN_PERIOD_WITH_ALL_TASK_EXECUTION_LOGS_ASIA_SEOUL")
+  reflectionNote           String    @default("")
+  improvementNote          String
+  snapshotPlannedCount     Int       @default(0)
+  snapshotCompletedCount   Int       @default(0)
+  snapshotDelayedCount     Int       @default(0)
+  snapshotBlockedCount     Int       @default(0)
+  snapshotEstimatedMinutes Int       @default(0)
+  snapshotActualMinutes    Int       @default(0)
+  snapshotDiffMinutes      Int       @default(0)
+  createdAt                DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt                DateTime  @updatedAt @db.Timestamptz(3)
+
+  nextPlan                 Plan?     @relation("ReviewNextPlan")
+
+  @@index([planId, createdAt])
+}
+

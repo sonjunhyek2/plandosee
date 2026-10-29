@@ -1,0 +1,47 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+}
+
+body {
+  background-color: #f8fafc;
+  color: #0f172a;
+  font-family: "Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont, system-ui, Roboto, "Helvetica Neue", "Segoe UI", "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", sans-serif;
+}
+
+/* Modern Web Guidance (dialog): prevent scroll chaining without locking body overflow */
+dialog:modal {
+  overscroll-behavior: contain;
+}
+
+dialog::backdrop {
+  background-color: rgba(15, 23, 42, 0.45);
+  backdrop-filter: blur(2px);
+  overflow: hidden;
+  overscroll-behavior: contain;
+}
+
+/* Modern Web Guidance (validate-input-after-interaction): style invalid/valid states only after user interaction */
+input:user-invalid,
+textarea:user-invalid,
+select:user-invalid {
+  border-color: #dc2626;
+  background-color: #fef2f2;
+}
+
+input:user-valid,
+textarea:user-valid {
+  border-color: #cbd5e1;
+}
+
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+button:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: 2px;
+}
+

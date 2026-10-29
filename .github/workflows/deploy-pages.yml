@@ -1,0 +1,105 @@
+name: Deploy GitHub Pages from verified free API
+
+on:
+  workflow_dispatch:
+    inputs:
+      api_base_url:
+        description: "Vercel Hobby API 주소 (예: https://plandosee-api.vercel.app)"
+        required: true
+        type: string
+      free_plans_confirmed:
+        description: "GitHub Free/Pages, Vercel Hobby, Neon Free를 대시보드에서 확인했습니까?"
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  verify-api:
+    if: ${{ inputs.free_plans_confirmed }}
+    runs-on: ubuntu-latest
+    outputs:
+      api_base_url: ${{ steps.url.outputs.value }}
+    steps:
+      - id: url
+        shell: bash
+        run: |
+          value="${{ inputs.api_base_url }}"
+          value="${value%/}"
+          if [[ ! "$value" =~ ^https://[a-zA-Z0-9.-]+$ ]]; then
+            echo "API 주소는 경로가 없는 HTTPS 주소여야 합니다." >&2
+            exit 1
+          fi
+          echo "value=$value" >> "$GITHUB_OUTPUT"
+      - name: Verify API commit and CORS
+        env:
+          API_BASE_URL: ${{ steps.url.outputs.value }}
+          EXPECTED_SHA: ${{ github.sha }}
+          PAGES_ORIGIN: https://${{ github.repository_owner }}.github.io
+        run: |
+          node <<'NODE'
+          (async () => {
+            const { API_BASE_URL, EXPECTED_SHA } = process.env;
+            const pagesOrigin = process.env.PAGES_ORIGIN.toLowerCase();
+            let lastError;
+            for (let attempt = 1; attempt <= 12; attempt += 1) {
+              try {
+                const response = await fetch(`${API_BASE_URL}/api/health`, {
+                  headers: { Origin: pagesOrigin },
+                });
+                const body = await response.json();
+                if (!response.ok) throw new Error(`health HTTP ${response.status}`);
+                if (body.commitSha !== EXPECTED_SHA) {
+                  throw new Error(`API SHA ${body.commitSha} != 제출 SHA ${EXPECTED_SHA}`);
+                }
+                if (response.headers.get("access-control-allow-origin") !== pagesOrigin) {
+                  throw new Error("GitHub Pages Origin에 대한 CORS 헤더가 없습니다.");
+                }
+                console.log(`API 검증 완료: ${body.commitSha}`);
+                return;
+              } catch (error) {
+                lastError = error;
+                console.log(`API 대기 ${attempt}/12: ${error.message}`);
+                await new Promise((resolve) => setTimeout(resolve, 10000));
+              }
+            }
+            throw lastError;
+          })().catch((error) => {
+            console.error(error);
+            process.exit(1);
+          });
+          NODE
+
+  deploy-pages:
+    needs: verify-api
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run build:web
+        env:
+          NEXT_PUBLIC_API_BASE_URL: ${{ needs.verify-api.outputs.api_base_url }}
+          NEXT_PUBLIC_BUILD_SHA: ${{ github.sha }}
+      - run: npm run verify:web-secrets
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: apps/web/out
+      - id: deployment
+        uses: actions/deploy-pages@v4
