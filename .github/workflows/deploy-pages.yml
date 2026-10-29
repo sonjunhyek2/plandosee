@@ -91,6 +91,7 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
+      - run: npm run db:generate
       - run: npm test
       - run: npm run build:web
         env:
